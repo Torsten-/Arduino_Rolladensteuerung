@@ -4,20 +4,40 @@
 #include <ArduinoJson.h>
 #include "FS.h"
 #include <PubSubClient.h> // MQTT - if you get rc=-4 you should maybe change MQTT_VERSION in library
+#include <AccelStepper.h>
 
 const int connect_wait = 20;
+
+// Pin-Zuordnung
+#define STEPPER_COUNT 2
+const uint8_t pin_stepper_dir[]   = {15, 5};
+const uint8_t pin_stepper_step[]  = {14, 4};
+const uint8_t pin_stepper_reed[]  = {12, 2};
+const uint8_t pin_stepper_sleep   = 13;
+
 
 const char* ssid;
 const char* password;
 const char* mqttserver = "192.168.42.4";
 uint16_t mqttport = 1883;
-const char* mqtttopic = "fhem/torsten";
+const char* mqtttopic_state[] = {"fhem/torsten/rollo0/state","fhem/torsten/rollo1/state"};
+const char* mqtttopic_cmd[] = {"fhem/torsten/rollo0/cmd","fhem/torsten/rollo1/cmd"};
+const char* mqtttopic_abs[] = {"fhem/torsten/rollo0/abs","fhem/torsten/rollo1/abs"};
+const char* mqtttopic_rel[] = {"fhem/torsten/rollo0/rel","fhem/torsten/rollo1/rel"};
 ESP8266WebServer server(80);
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 String network_list = "";
 boolean ap_mode = true;
 boolean mqtt_configured = false;
+
+AccelStepper stepper[STEPPER_COUNT];
+boolean driver_active;
+
+int max_steps[] = {
+  (-1029*18),
+  (-1029*14)
+};
 
 //////////////////////////
 // CONFIG File
@@ -294,11 +314,15 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
 void mqtt_reconnect() {
   String client_name = "ESP8266Client_"+WiFi.macAddress();
   while (!mqttClient.connected()) {
-    Serial.print("Attempting MQTT connection...");
+    Serial.println("Attempting MQTT connection...");
     
     if (mqttClient.connect(client_name.c_str())) {
       Serial.println("connected");
-      mqttClient.subscribe(mqtttopic);
+      for(uint8_t i=0; i<STEPPER_COUNT; i++){
+        mqttClient.subscribe(mqtttopic_cmd[i]);
+        mqttClient.subscribe(mqtttopic_abs[i]);
+        //mqttClient.subscribe(mqtttopic_rel[i]);
+      }
     } else {
       Serial.print("failed, rc=");
       Serial.print(mqttClient.state());
@@ -307,6 +331,39 @@ void mqtt_reconnect() {
     }
   }
 }
+
+//////////////////////////
+// Stepper
+//////////////////////////
+void goToPosition(uint8_t stepper_nr, float pos_in_percent){
+  float pos_to_go = max_steps[stepper_nr] * pos_in_percent / 100;
+  Serial.print("Move Stepper ");
+  Serial.print(stepper_nr);
+  Serial.print(" to ");
+  Serial.println(pos_to_go);
+  stepper[stepper_nr].moveTo(pos_to_go);
+}
+
+void findPositionZero(uint8_t stepper_nr){
+  if(digitalRead(pin_stepper_reed[stepper_nr]) == LOW){
+    Serial.print("Stepper ");
+    Serial.print(stepper_nr);
+    Serial.println(" in position ..");
+    stepper[stepper_nr].setCurrentPosition(0);
+  }else{
+    Serial.print("Stepper ");
+    Serial.print(stepper_nr);
+    Serial.println(" searching position ..");
+    int pos_to_go;
+    if(max_steps[stepper_nr] < 0){
+      pos_to_go = (max_steps[stepper_nr]*-1)+1000;
+    }else{
+      pos_to_go = (max_steps[stepper_nr]*-1)-1000;
+    }
+    stepper[stepper_nr].moveTo(pos_to_go);
+  }
+}
+
 
 //////////////////////////
 // Setup
@@ -341,16 +398,31 @@ void setup() {
 
   // Setup MQTT
   if(!ap_mode){
-    if(mqttserver == "" || mqttport == 0 || mqtttopic == ""){
+    if(mqttserver == "" || mqttport == 0){
       Serial.println("MQTT not configured ..");
     }else{
       Serial.print("Configure MQTT Server: ");
       Serial.print(mqttserver);
       Serial.print(":");
-      Serial.print(mqttport);
+      Serial.println(mqttport);
       mqttClient.setServer(mqttserver, mqttport);
       mqttClient.setCallback(mqtt_callback);
       mqtt_configured = true;
+
+      Serial.println("Initiate Steppers ..");
+      pinMode(pin_stepper_sleep, OUTPUT);
+      digitalWrite(pin_stepper_sleep, LOW); // LOW = sleep, HIGH = active
+      driver_active = false;
+      for(uint8_t i=0; i<STEPPER_COUNT; i++){
+        stepper[i] = AccelStepper (AccelStepper::DRIVER, pin_stepper_step[i], pin_stepper_dir[i]);
+        stepper[i].setMaxSpeed(8000);
+        stepper[i].setAcceleration(4000);
+    
+        pinMode(pin_stepper_reed[i], OUTPUT);
+        digitalWrite(pin_stepper_reed[i], HIGH);
+
+        findPositionZero(i);
+      }
     }
   }
 }
@@ -366,8 +438,32 @@ void loop() {
     if(!mqttClient.connected()) {
       mqtt_reconnect();
     }
-    mqttClient.publish(mqtttopic,"blabla");
     
     mqttClient.loop();
+
+    driver_active = false;
+    for(byte i=0; i<STEPPER_COUNT; i++){
+      // Activate the stepper driver just for movements
+      if(stepper[i].distanceToGo() != 0){
+        driver_active = true;
+        digitalWrite(pin_stepper_sleep, HIGH); // LOW = sleep, HIGH = active
+
+        const char* cur_pos = String(stepper[i].currentPosition()).c_str();
+        Serial.print("Stepper ");
+        Serial.print(i);
+        Serial.print(" running - current Pos: ");
+        Serial.println(cur_pos);
+        mqttClient.publish(mqtttopic_state[i],cur_pos);
+      }
+
+      if(stepper[i].currentPosition() != 0 && digitalRead(pin_stepper_reed[i]) == LOW){
+        stepper[i].stop();
+        stepper[i].setCurrentPosition(0);
+      }
+
+      // Do pending jobs
+      stepper[i].run();
+    }
+    if(!driver_active) digitalWrite(pin_stepper_sleep, LOW); // LOW = sleep, HIGH = active
   }
 }
