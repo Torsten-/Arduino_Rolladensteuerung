@@ -10,10 +10,10 @@ const int connect_wait = 20;
 
 // Pin-Zuordnung
 #define STEPPER_COUNT 2
-const uint8_t pin_stepper_dir[]   = {15, 5};
-const uint8_t pin_stepper_step[]  = {14, 4};
-const uint8_t pin_stepper_reed[]  = {12, 2};
-const uint8_t pin_stepper_sleep   = 13;
+const uint8_t pin_stepper_dir[]   = { 2,14};
+const uint8_t pin_stepper_step[]  = { 4,12};
+const uint8_t pin_stepper_reed[]  = {16,13};
+const uint8_t pin_stepper_sleep   = 5;
 
 
 const char* ssid;
@@ -33,10 +33,11 @@ boolean mqtt_configured = false;
 
 AccelStepper stepper[STEPPER_COUNT];
 boolean driver_active;
+boolean driver_active_last;
 
 int max_steps[] = {
   (-1029*18),
-  (-1029*14)
+  (-1029*12)
 };
 
 //////////////////////////
@@ -73,9 +74,6 @@ bool loadConfig() {
 
   ssid = json["ssid"];
   password = json["password"];
-//  mqttserver = json["mqttserver"];
-//  mqttport = json["mqttport"];
-//  mqtttopic = json["mqtttopic"];
 
   Serial.print("Loaded SSID: ");
   Serial.print("|");
@@ -85,18 +83,6 @@ bool loadConfig() {
   Serial.print("|");
   Serial.print(password);
   Serial.println("|");
-/*  Serial.print("Loaded MQTT Server: ");
-  Serial.print("|");
-  Serial.print(mqttserver);
-  Serial.println("|");
-  Serial.print("Loaded MQTT Port: ");
-  Serial.print("|");
-  Serial.print(mqttport);
-  Serial.println("|");
-  Serial.print("Loaded MQTT Topic: ");
-  Serial.print("|");
-  Serial.print(mqtttopic);
-  Serial.println("|");*/
   return true;
 }
 
@@ -223,9 +209,6 @@ void handleRoot(){
   message += "<form action='/save' method='POST'><table>";
   message += "<tr><td><b>SSID:</b></td><td><input type='text' name='ssid' value='"+server.arg("ssid")+"'></td></tr>";
   message += "<tr><td><b>Password:</b></td><td><input type='text' name='password' value=''></td></tr>";
-//  message += "<tr><td><b>MQTT Server:</b></td><td><input type='text' name='mqttserver' value=''></td></tr>";
-//  message += "<tr><td><b>MQTT Port:</b></td><td><input type='text' name='mqttport' value=''> 1883</td></tr>";
-//  message += "<tr><td><b>MQTT Topic:</b></td><td><input type='text' name='mqtttopic' value=''></td></tr>";
   message += "<tr><td colspan='2' align='center'><input type='submit' value='save'></td></tr>";
   message += "</table></form>";
   
@@ -241,28 +224,16 @@ void handleSave(){
     Serial.println("--- New Settings ---");
     String new_ssid = server.arg("ssid");
     String new_password = server.arg("password");
-//    String new_mqttserver = server.arg("mqttserver");
-//    String new_mqttport = server.arg("mqttport");
-//    String new_mqtttopic = server.arg("mqtttopic");
 
     Serial.print("New SSID: ");
     Serial.println(new_ssid);
     Serial.print("New Password: ");
     Serial.println(new_password);
-/*    Serial.print("New MQTT Server: ");
-    Serial.println(new_mqttserver);
-    Serial.print("New MQTT Port: ");
-    Serial.println(new_mqttport);
-    Serial.print("New MQTT Topic: ");
-    Serial.println(new_mqtttopic);*/
 
     StaticJsonBuffer<200> jsonBuffer;
     JsonObject& json = jsonBuffer.createObject();
     json["ssid"] = new_ssid;
     json["password"] = new_password;
-//    json["mqttserver"] = new_mqttserver;
-//    json["mqttport"] = new_mqttport;
-//    json["mqtttopic"] = new_mqtttopic;
           
     if(!saveConfig(json)){
       Serial.println("Failed to save config");
@@ -344,6 +315,12 @@ void goToPosition(uint8_t stepper_nr, float pos_in_percent){
   stepper[stepper_nr].moveTo(pos_to_go);
 }
 
+int getPosition(uint8_t stepper_nr){
+  float pos = stepper[stepper_nr].currentPosition()/max_steps[stepper_nr]*100;
+  if(pos < 0) pos = pos*-1;
+  return (int)pos;
+}
+
 void findPositionZero(uint8_t stepper_nr){
   if(digitalRead(pin_stepper_reed[stepper_nr]) == LOW){
     Serial.print("Stepper ");
@@ -413,14 +390,12 @@ void setup() {
       pinMode(pin_stepper_sleep, OUTPUT);
       digitalWrite(pin_stepper_sleep, LOW); // LOW = sleep, HIGH = active
       driver_active = false;
+      driver_active_last = true;
       for(uint8_t i=0; i<STEPPER_COUNT; i++){
         stepper[i] = AccelStepper (AccelStepper::DRIVER, pin_stepper_step[i], pin_stepper_dir[i]);
-        stepper[i].setMaxSpeed(8000);
-        stepper[i].setAcceleration(4000);
-    
-        pinMode(pin_stepper_reed[i], OUTPUT);
-        digitalWrite(pin_stepper_reed[i], HIGH);
-
+        stepper[i].setMaxSpeed(3000);
+        stepper[i].setAcceleration(2000);
+        pinMode(pin_stepper_reed[i], INPUT);
         findPositionZero(i);
       }
     }
@@ -432,8 +407,6 @@ void setup() {
 // Loop
 //////////////////////////
 void loop() {
-  server.handleClient();
-
   if(!ap_mode && mqtt_configured){
     if(!mqttClient.connected()) {
       mqtt_reconnect();
@@ -446,14 +419,8 @@ void loop() {
       // Activate the stepper driver just for movements
       if(stepper[i].distanceToGo() != 0){
         driver_active = true;
+        driver_active_last = true;
         digitalWrite(pin_stepper_sleep, HIGH); // LOW = sleep, HIGH = active
-
-        const char* cur_pos = String(stepper[i].currentPosition()).c_str();
-        Serial.print("Stepper ");
-        Serial.print(i);
-        Serial.print(" running - current Pos: ");
-        Serial.println(cur_pos);
-        mqttClient.publish(mqtttopic_state[i],cur_pos);
       }
 
       if(stepper[i].currentPosition() != 0 && digitalRead(pin_stepper_reed[i]) == LOW){
@@ -464,6 +431,20 @@ void loop() {
       // Do pending jobs
       stepper[i].run();
     }
-    if(!driver_active) digitalWrite(pin_stepper_sleep, LOW); // LOW = sleep, HIGH = active
+    if(!driver_active && driver_active_last){
+      digitalWrite(pin_stepper_sleep, LOW); // LOW = sleep, HIGH = active
+      driver_active_last = false;
+      
+      for(byte i=0; i<STEPPER_COUNT; i++){
+        const char* cur_pos = String(getPosition(i)).c_str();
+        Serial.print("Stepper ");
+        Serial.print(i);
+        Serial.print(" now at Pos: ");
+        Serial.println(cur_pos);
+        mqttClient.publish(mqtttopic_state[i],cur_pos);
+      }
+    }
+  }else{
+    server.handleClient();
   }
 }
