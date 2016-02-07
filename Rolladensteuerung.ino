@@ -1,4 +1,5 @@
 // TODO: encapsulate stepper with "struct"
+// TODO: MQTT/WLAN/Stepper functions in extra files
 
 #include <ESP8266WiFi.h>
 #include <WiFiClient.h> 
@@ -31,6 +32,7 @@ PubSubClient mqttClient(espClient);
 String network_list = "";
 boolean ap_mode = true;
 boolean mqtt_configured = false;
+boolean leave_reed_position = false;
 
 AccelStepper stepper[STEPPER_COUNT];
 boolean driver_active;
@@ -308,11 +310,13 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
         Serial.println("move to 100");
         goToPosition(i,100);
       }else if(cmd.startsWith("off")){
-        Serial.println("move to 0");
-        goToPosition(i,0);
+        Serial.println("move and find pos zero");
+        findPositionZero(i);
       }else if(cmd.startsWith("stop")){
         Serial.println("stop");
         stepper[i].stop();
+        stepper[i].setSpeed(0);
+        stepper[i].moveTo(stepper[i].currentPosition());
         send_state_update = true;
       }else Serial.println("command not known");
     }
@@ -350,6 +354,7 @@ void goToPosition(uint8_t stepper_nr, float pos_in_percent){
   Serial.println(pos_to_go);
   stepper[stepper_nr].moveTo(pos_to_go);
   send_state_update = true;
+  leave_reed_position = true;
 }
 
 int getPosition(uint8_t stepper_nr){
@@ -377,6 +382,7 @@ void findPositionZero(uint8_t stepper_nr){
     }
     stepper[stepper_nr].moveTo(pos_to_go);
   }
+  send_state_update = true;
 }
 
 
@@ -461,11 +467,13 @@ void loop() {
         digitalWrite(pin_stepper_sleep, HIGH); // LOW = sleep, HIGH = active
       }
 
-      if(stepper[i].currentPosition() != 0 && digitalRead(pin_stepper_reed[i]) == LOW){
+      if(!leave_reed_position && stepper[i].currentPosition() != 0 && digitalRead(pin_stepper_reed[i]) == LOW){
         stepper[i].stop();
         stepper[i].setSpeed(0);
         stepper[i].setCurrentPosition(0);
       }
+
+      if(leave_reed_position && digitalRead(pin_stepper_reed[i]) == HIGH) leave_reed_position = false;
 
       // Do pending jobs
       stepper[i].run();
