@@ -1,3 +1,5 @@
+// TODO: encapsulate stepper with "struct"
+
 #include <ESP8266WiFi.h>
 #include <WiFiClient.h> 
 #include <ESP8266WebServer.h>
@@ -23,7 +25,6 @@ uint16_t mqttport = 1883;
 const char* mqtttopic_state[] = {"fhem/torsten/rollo0/state","fhem/torsten/rollo1/state"};
 const char* mqtttopic_cmd[] = {"fhem/torsten/rollo0/cmd","fhem/torsten/rollo1/cmd"};
 const char* mqtttopic_abs[] = {"fhem/torsten/rollo0/abs","fhem/torsten/rollo1/abs"};
-const char* mqtttopic_rel[] = {"fhem/torsten/rollo0/rel","fhem/torsten/rollo1/rel"};
 ESP8266WebServer server(80);
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
@@ -33,10 +34,10 @@ boolean mqtt_configured = false;
 
 AccelStepper stepper[STEPPER_COUNT];
 boolean driver_active;
-boolean driver_active_last;
+boolean send_state_update = false;
 
 int max_steps[] = {
-  (-1029*18),
+  (1029*18),
   (-1029*12)
 };
 
@@ -276,10 +277,46 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
   Serial.print("Message arrived [");
   Serial.print(topic);
   Serial.print("] ");
+  char msg[length];
   for (int i = 0; i < length; i++) {
     Serial.print((char)payload[i]);
+    msg[i] = payload[i];
   }
-  Serial.println();
+  Serial.print("/");
+  Serial.print(msg);
+  Serial.print(" (");
+  Serial.print(length);
+  Serial.println(")");
+
+  for(uint8_t i=0; i<STEPPER_COUNT; i++){
+    if(String(topic) == String(mqtttopic_abs[i])){
+      float new_pos = String(msg).toFloat();
+      Serial.print("Stepper ");
+      Serial.print(i);
+      Serial.print(" - abs: ");
+      if(new_pos < 0 || new_pos > 100) Serial.println("value out of range");
+      else{
+        Serial.println("move");
+        goToPosition(i,new_pos);
+      }
+    }else if(String(topic) == String(mqtttopic_cmd[i])){
+      String cmd = String(msg);
+      Serial.print("Stepper ");
+      Serial.print(i);
+      Serial.print(" - cmd: ");
+      if(cmd.startsWith("on")){
+        Serial.println("move to 100");
+        goToPosition(i,100);
+      }else if(cmd.startsWith("off")){
+        Serial.println("move to 0");
+        goToPosition(i,0);
+      }else if(cmd.startsWith("stop")){
+        Serial.println("stop");
+        stepper[i].stop();
+        send_state_update = true;
+      }else Serial.println("command not known");
+    }
+  }
 }
 
 void mqtt_reconnect() {
@@ -292,7 +329,6 @@ void mqtt_reconnect() {
       for(uint8_t i=0; i<STEPPER_COUNT; i++){
         mqttClient.subscribe(mqtttopic_cmd[i]);
         mqttClient.subscribe(mqtttopic_abs[i]);
-        //mqttClient.subscribe(mqtttopic_rel[i]);
       }
     } else {
       Serial.print("failed, rc=");
@@ -313,11 +349,13 @@ void goToPosition(uint8_t stepper_nr, float pos_in_percent){
   Serial.print(" to ");
   Serial.println(pos_to_go);
   stepper[stepper_nr].moveTo(pos_to_go);
+  send_state_update = true;
 }
 
 int getPosition(uint8_t stepper_nr){
-  float pos = stepper[stepper_nr].currentPosition()/max_steps[stepper_nr]*100;
+  float pos = String(stepper[stepper_nr].currentPosition()).toFloat()/max_steps[stepper_nr]*100;
   if(pos < 0) pos = pos*-1;
+  pos += 0.01; // Fix to get the correct integer value from casting
   return (int)pos;
 }
 
@@ -390,7 +428,7 @@ void setup() {
       pinMode(pin_stepper_sleep, OUTPUT);
       digitalWrite(pin_stepper_sleep, LOW); // LOW = sleep, HIGH = active
       driver_active = false;
-      driver_active_last = true;
+      send_state_update = true;
       for(uint8_t i=0; i<STEPPER_COUNT; i++){
         stepper[i] = AccelStepper (AccelStepper::DRIVER, pin_stepper_step[i], pin_stepper_dir[i]);
         stepper[i].setMaxSpeed(3000);
@@ -419,21 +457,22 @@ void loop() {
       // Activate the stepper driver just for movements
       if(stepper[i].distanceToGo() != 0){
         driver_active = true;
-        driver_active_last = true;
+        send_state_update = true;
         digitalWrite(pin_stepper_sleep, HIGH); // LOW = sleep, HIGH = active
       }
 
       if(stepper[i].currentPosition() != 0 && digitalRead(pin_stepper_reed[i]) == LOW){
         stepper[i].stop();
+        stepper[i].setSpeed(0);
         stepper[i].setCurrentPosition(0);
       }
 
       // Do pending jobs
       stepper[i].run();
     }
-    if(!driver_active && driver_active_last){
+    if(!driver_active && send_state_update){
       digitalWrite(pin_stepper_sleep, LOW); // LOW = sleep, HIGH = active
-      driver_active_last = false;
+      send_state_update = false;
       
       for(byte i=0; i<STEPPER_COUNT; i++){
         const char* cur_pos = String(getPosition(i)).c_str();
