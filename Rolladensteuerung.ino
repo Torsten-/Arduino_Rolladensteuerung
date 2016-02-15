@@ -33,14 +33,16 @@ String network_list = "";
 boolean ap_mode = true;
 boolean mqtt_configured = false;
 boolean leave_reed_position = false;
+unsigned int time_to_leave_reed = 1000;
+unsigned long time_leaving;
 
 AccelStepper stepper[STEPPER_COUNT];
 boolean driver_active;
 boolean send_state_update = false;
 
 int max_steps[] = {
-  (1029*18),
-  (-1029*12)
+  (1048*16),
+  (-1048*18)
 };
 
 //////////////////////////
@@ -355,6 +357,7 @@ void goToPosition(uint8_t stepper_nr, float pos_in_percent){
   stepper[stepper_nr].moveTo(pos_to_go);
   send_state_update = true;
   leave_reed_position = true;
+  time_leaving = millis();
 }
 
 int getPosition(uint8_t stepper_nr){
@@ -473,7 +476,7 @@ void loop() {
         stepper[i].setCurrentPosition(0);
       }
 
-      if(leave_reed_position && digitalRead(pin_stepper_reed[i]) == HIGH) leave_reed_position = false;
+      if(leave_reed_position && digitalRead(pin_stepper_reed[i]) == HIGH && millis() > (time_leaving+time_to_leave_reed)) leave_reed_position = false;
 
       // Do pending jobs
       stepper[i].run();
