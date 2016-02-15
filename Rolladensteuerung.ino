@@ -356,7 +356,7 @@ void goToPosition(uint8_t stepper_nr, float pos_in_percent){
   Serial.println(pos_to_go);
   stepper[stepper_nr].moveTo(pos_to_go);
   send_state_update = true;
-  leave_reed_position = true;
+  if(pos_in_percent > 5) leave_reed_position = true;
   time_leaving = millis();
 }
 
