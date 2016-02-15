@@ -26,6 +26,8 @@ uint16_t mqttport = 1883;
 const char* mqtttopic_state[] = {"fhem/torsten/rollo0/state","fhem/torsten/rollo1/state"};
 const char* mqtttopic_cmd[] = {"fhem/torsten/rollo0/cmd","fhem/torsten/rollo1/cmd"};
 const char* mqtttopic_abs[] = {"fhem/torsten/rollo0/abs","fhem/torsten/rollo1/abs"};
+const char* mqtttopic_speed_set = "fhem/torsten/rollo/speed/set";
+const char* mqtttopic_speed_get = "fhem/torsten/rollo/speed/get";
 ESP8266WebServer server(80);
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
@@ -321,6 +323,14 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
         stepper[i].moveTo(stepper[i].currentPosition());
         send_state_update = true;
       }else Serial.println("command not known");
+    }else if(String(topic) == String(mqtttopic_speed_set)){
+      unsigned int new_speed = String(msg).toInt();
+      Serial.print("Set new speed: ");
+      Serial.println(new_speed);
+      for(uint8_t s=0; s<STEPPER_COUNT; s++){
+        stepper[s].setMaxSpeed(new_speed);
+      }
+      mqttClient.publish(mqtttopic_speed_get,String(new_speed).c_str());
     }
   }
 }
@@ -336,6 +346,7 @@ void mqtt_reconnect() {
         mqttClient.subscribe(mqtttopic_cmd[i]);
         mqttClient.subscribe(mqtttopic_abs[i]);
       }
+      mqttClient.subscribe(mqtttopic_speed_set);
     } else {
       Serial.print("failed, rc=");
       Serial.print(mqttClient.state());
@@ -440,7 +451,9 @@ void setup() {
       send_state_update = true;
       for(uint8_t i=0; i<STEPPER_COUNT; i++){
         stepper[i] = AccelStepper (AccelStepper::DRIVER, pin_stepper_step[i], pin_stepper_dir[i]);
-        stepper[i].setMaxSpeed(3000);
+        unsigned int new_speed = 3000;
+        stepper[i].setMaxSpeed(new_speed);
+        mqttClient.publish(mqtttopic_speed_get,String(new_speed).c_str());
         stepper[i].setAcceleration(2000);
         pinMode(pin_stepper_reed[i], INPUT);
         findPositionZero(i);
