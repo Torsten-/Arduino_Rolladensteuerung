@@ -1,5 +1,6 @@
 // TODO: encapsulate stepper with "struct"
 // TODO: MQTT/WLAN/Stepper functions in extra files
+// TODO: stop is not working any more with blocking stepper movement
 
 #include <ESP8266WiFi.h>
 #include <WiFiClient.h> 
@@ -26,8 +27,9 @@ uint16_t mqttport = 1883;
 const char* mqtttopic_state[] = {"fhem/torsten/rollo0/state","fhem/torsten/rollo1/state"};
 const char* mqtttopic_cmd[] = {"fhem/torsten/rollo0/cmd","fhem/torsten/rollo1/cmd"};
 const char* mqtttopic_abs[] = {"fhem/torsten/rollo0/abs","fhem/torsten/rollo1/abs"};
-const char* mqtttopic_speed_set = "fhem/torsten/rollo/speed/set";
-const char* mqtttopic_speed_get = "fhem/torsten/rollo/speed/get";
+const char* mqtttopic_all_cmd = "fhem/torsten/rollo/cmd";
+//const char* mqtttopic_speed_set = "fhem/torsten/rollo/speed/set";
+//const char* mqtttopic_speed_get = "fhem/torsten/rollo/speed/get";
 ESP8266WebServer server(80);
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
@@ -293,43 +295,68 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
   Serial.print(length);
   Serial.println(")");
 
-  for(uint8_t i=0; i<STEPPER_COUNT; i++){
-    if(String(topic) == String(mqtttopic_abs[i])){
-      float new_pos = String(msg).toFloat();
-      Serial.print("Stepper ");
-      Serial.print(i);
-      Serial.print(" - abs: ");
-      if(new_pos < 0 || new_pos > 100) Serial.println("value out of range");
-      else{
-        Serial.println("move");
-        goToPosition(i,new_pos);
-      }
-    }else if(String(topic) == String(mqtttopic_cmd[i])){
-      String cmd = String(msg);
-      Serial.print("Stepper ");
-      Serial.print(i);
-      Serial.print(" - cmd: ");
-      if(cmd.startsWith("on")){
-        Serial.println("move to 100");
+  if(String(topic) == String(mqtttopic_all_cmd)){
+    String cmd = String(msg);
+    Serial.print("All Stepper - cmd");
+    if(cmd.startsWith("on")){
+      Serial.println("move to 100");
+      for(uint8_t i=0; i<STEPPER_COUNT; i++){
         goToPosition(i,100);
-      }else if(cmd.startsWith("off")){
-        Serial.println("move and find pos zero");
+      }
+    }else if(cmd.startsWith("off")){
+      Serial.println("move and find pos zero");
+      for(uint8_t i=0; i<STEPPER_COUNT; i++){
         findPositionZero(i);
-      }else if(cmd.startsWith("stop")){
-        Serial.println("stop");
+      }
+    }else if(cmd.startsWith("stop")){
+      Serial.println("stop");
+      for(uint8_t i=0; i<STEPPER_COUNT; i++){
         stepper[i].stop();
         stepper[i].setSpeed(0);
         stepper[i].moveTo(stepper[i].currentPosition());
         send_state_update[i] = true;
-      }else Serial.println("command not known");
-    }else if(String(topic) == String(mqtttopic_speed_set)){
-      unsigned int new_speed = String(msg).toInt();
-      Serial.print("Set new speed: ");
-      Serial.println(new_speed);
-      for(uint8_t s=0; s<STEPPER_COUNT; s++){
-        stepper[s].setMaxSpeed(new_speed);
       }
-      mqttClient.publish(mqtttopic_speed_get,String(new_speed).c_str());
+    }else Serial.println("command not known");
+/*  }else if(String(topic) == String(mqtttopic_speed_set)){
+    unsigned int new_speed = String(msg).toInt();
+    Serial.print("Set new speed: ");
+    Serial.println(new_speed);
+    for(uint8_t s=0; s<STEPPER_COUNT; s++){
+      stepper[s].setMaxSpeed(new_speed);
+    }
+    mqttClient.publish(mqtttopic_speed_get,String(new_speed).c_str());
+*/
+  }else{
+    for(uint8_t i=0; i<STEPPER_COUNT; i++){
+      if(String(topic) == String(mqtttopic_abs[i])){
+        float new_pos = String(msg).toFloat();
+        Serial.print("Stepper ");
+        Serial.print(i);
+        Serial.print(" - abs: ");
+        if(new_pos < 0 || new_pos > 100) Serial.println("value out of range");
+        else{
+          Serial.println("move");
+          goToPosition(i,new_pos);
+        }
+      }else if(String(topic) == String(mqtttopic_cmd[i])){
+        String cmd = String(msg);
+        Serial.print("Stepper ");
+        Serial.print(i);
+        Serial.print(" - cmd: ");
+        if(cmd.startsWith("on")){
+          Serial.println("move to 100");
+          goToPosition(i,100);
+        }else if(cmd.startsWith("off")){
+          Serial.println("move and find pos zero");
+          findPositionZero(i);
+        }else if(cmd.startsWith("stop")){
+          Serial.println("stop");
+          stepper[i].stop();
+          stepper[i].setSpeed(0);
+          stepper[i].moveTo(stepper[i].currentPosition());
+          send_state_update[i] = true;
+        }else Serial.println("command not known");
+      }
     }
   }
 }
@@ -345,7 +372,8 @@ void mqtt_reconnect() {
         mqttClient.subscribe(mqtttopic_cmd[i]);
         mqttClient.subscribe(mqtttopic_abs[i]);
       }
-      mqttClient.subscribe(mqtttopic_speed_set);
+//      mqttClient.subscribe(mqtttopic_speed_set);
+      mqttClient.subscribe(mqtttopic_all_cmd);
     } else {
       Serial.print("failed, rc=");
       Serial.print(mqttClient.state());
@@ -451,7 +479,7 @@ void setup() {
         stepper[i] = AccelStepper (AccelStepper::DRIVER, pin_stepper_step[i], pin_stepper_dir[i]);
         unsigned int new_speed = 3000;
         stepper[i].setMaxSpeed(new_speed);
-        mqttClient.publish(mqtttopic_speed_get,String(new_speed).c_str());
+//        mqttClient.publish(mqtttopic_speed_get,String(new_speed).c_str());
         stepper[i].setAcceleration(1000);
         pinMode(pin_stepper_reed[i], INPUT);
         findPositionZero(i);
