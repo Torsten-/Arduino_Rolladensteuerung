@@ -9,7 +9,7 @@
 #include <PubSubClient.h> // MQTT - if you get rc=-4 you should maybe change MQTT_VERSION in library
 #include <AccelStepper.h>
 
-const int connect_wait = 20;
+const int connect_wait = 20; // WLAN
 
 // Pin-Zuordnung
 #define STEPPER_COUNT 2
@@ -33,14 +33,13 @@ WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 String network_list = "";
 boolean ap_mode = true;
-boolean mqtt_configured = false;
-boolean leave_reed_position = false;
+boolean leave_reed_position[] = {false,false};
 unsigned int time_to_leave_reed = 1000;
-unsigned long time_leaving;
+unsigned long time_leaving[2];
 
 AccelStepper stepper[STEPPER_COUNT];
 boolean driver_active;
-boolean send_state_update = false;
+boolean send_state_update[] = {false,false};
 
 int max_steps[] = {
   (1048*16),
@@ -321,7 +320,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
         stepper[i].stop();
         stepper[i].setSpeed(0);
         stepper[i].moveTo(stepper[i].currentPosition());
-        send_state_update = true;
+        send_state_update[i] = true;
       }else Serial.println("command not known");
     }else if(String(topic) == String(mqtttopic_speed_set)){
       unsigned int new_speed = String(msg).toInt();
@@ -366,9 +365,9 @@ void goToPosition(uint8_t stepper_nr, float pos_in_percent){
   Serial.print(" to ");
   Serial.println(pos_to_go);
   stepper[stepper_nr].moveTo(pos_to_go);
-  send_state_update = true;
-  if(pos_in_percent > 5) leave_reed_position = true;
-  time_leaving = millis();
+  send_state_update[stepper_nr] = true;
+  if(pos_in_percent > 5) leave_reed_position[stepper_nr] = true;
+  time_leaving[stepper_nr] = millis();
 }
 
 int getPosition(uint8_t stepper_nr){
@@ -396,7 +395,7 @@ void findPositionZero(uint8_t stepper_nr){
     }
     stepper[stepper_nr].moveTo(pos_to_go);
   }
-  send_state_update = true;
+  send_state_update[stepper_nr] = true;
 }
 
 
@@ -442,19 +441,18 @@ void setup() {
       Serial.println(mqttport);
       mqttClient.setServer(mqttserver, mqttport);
       mqttClient.setCallback(mqtt_callback);
-      mqtt_configured = true;
 
       Serial.println("Initiate Steppers ..");
       pinMode(pin_stepper_sleep, OUTPUT);
       digitalWrite(pin_stepper_sleep, LOW); // LOW = sleep, HIGH = active
       driver_active = false;
-      send_state_update = true;
       for(uint8_t i=0; i<STEPPER_COUNT; i++){
+        send_state_update[i] = true;
         stepper[i] = AccelStepper (AccelStepper::DRIVER, pin_stepper_step[i], pin_stepper_dir[i]);
         unsigned int new_speed = 3000;
         stepper[i].setMaxSpeed(new_speed);
         mqttClient.publish(mqtttopic_speed_get,String(new_speed).c_str());
-        stepper[i].setAcceleration(2000);
+        stepper[i].setAcceleration(1000);
         pinMode(pin_stepper_reed[i], INPUT);
         findPositionZero(i);
       }
@@ -467,38 +465,29 @@ void setup() {
 // Loop
 //////////////////////////
 void loop() {
-  if(!ap_mode && mqtt_configured){
-    if(!mqttClient.connected()) {
-      mqtt_reconnect();
+  if(!ap_mode){
+    if(!driver_active){
+      // Do MQTT only if steppers are not running
+      if(!mqttClient.connected()) {
+        mqtt_reconnect();
+      }
+    
+      mqttClient.loop(); // Do MQTT
+
+      // Deaktivate Stepper drivers
+      digitalWrite(pin_stepper_sleep, LOW); // LOW = sleep, HIGH = active
     }
     
-    mqttClient.loop();
-
     driver_active = false;
     for(byte i=0; i<STEPPER_COUNT; i++){
-      // Activate the stepper driver just for movements
       if(stepper[i].distanceToGo() != 0){
+        // Activate the stepper driver just for movements
         driver_active = true;
-        send_state_update = true;
+        send_state_update[i] = true;
         digitalWrite(pin_stepper_sleep, HIGH); // LOW = sleep, HIGH = active
-      }
-
-      if(!leave_reed_position && stepper[i].currentPosition() != 0 && digitalRead(pin_stepper_reed[i]) == LOW){
-        stepper[i].stop();
-        stepper[i].setSpeed(0);
-        stepper[i].setCurrentPosition(0);
-      }
-
-      if(leave_reed_position && digitalRead(pin_stepper_reed[i]) == HIGH && millis() > (time_leaving+time_to_leave_reed)) leave_reed_position = false;
-
-      // Do pending jobs
-      stepper[i].run();
-    }
-    if(!driver_active && send_state_update){
-      digitalWrite(pin_stepper_sleep, LOW); // LOW = sleep, HIGH = active
-      send_state_update = false;
-      
-      for(byte i=0; i<STEPPER_COUNT; i++){
+      }else if(send_state_update[i]){
+        // Send Update of current position
+        send_state_update[i] = false;
         const char* cur_pos = String(getPosition(i)).c_str();
         Serial.print("Stepper ");
         Serial.print(i);
@@ -506,8 +495,21 @@ void loop() {
         Serial.println(cur_pos);
         mqttClient.publish(mqtttopic_state[i],cur_pos);
       }
+
+      // Stop at reed-Position
+      if(!leave_reed_position[i] && stepper[i].currentPosition() != 0 && digitalRead(pin_stepper_reed[i]) == LOW){
+        stepper[i].stop();
+        stepper[i].setSpeed(0);
+        stepper[i].setCurrentPosition(0);
+      }
+
+      // Reset "leave_reed_position" if "time_to_leave" is reached
+      if(leave_reed_position[i] && digitalRead(pin_stepper_reed[i]) == HIGH && millis() > (time_leaving[i]+time_to_leave_reed)) leave_reed_position[i] = false;
+
+      // Do pending jobs
+      stepper[i].run();
     }
   }else{
-    server.handleClient();
+    server.handleClient(); // Do HTTP-Requests
   }
 }
