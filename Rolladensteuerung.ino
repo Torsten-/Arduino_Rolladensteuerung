@@ -513,7 +513,7 @@ void loop() {
         driver_active = true;
         send_state_update[i] = true;
         digitalWrite(pin_stepper_sleep, HIGH); // LOW = sleep, HIGH = active
-      }else if(send_state_update[i]){
+      }else if(!driver_active && send_state_update[i]){
         // Send Update of current position
         send_state_update[i] = false;
         const char* cur_pos = String(getPosition(i)).c_str();
