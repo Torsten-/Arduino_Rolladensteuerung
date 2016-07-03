@@ -304,9 +304,10 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
         goToPosition(i,100);
       }
     }else if(cmd.startsWith("off")){
-      Serial.println("move and find pos zero");
+      Serial.println("move to 0");
       for(uint8_t i=0; i<STEPPER_COUNT; i++){
-        findPositionZero(i);
+        goToPosition(i,0);
+        //findPositionZero(i);
       }
     }else if(cmd.startsWith("stop")){
       Serial.println("stop");
