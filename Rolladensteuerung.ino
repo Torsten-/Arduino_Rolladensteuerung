@@ -478,7 +478,7 @@ void setup() {
       for(uint8_t i=0; i<STEPPER_COUNT; i++){
         send_state_update[i] = true;
         stepper[i] = AccelStepper (AccelStepper::DRIVER, pin_stepper_step[i], pin_stepper_dir[i]);
-        unsigned int new_speed = 2400;
+        unsigned int new_speed = 1600;
         stepper[i].setMaxSpeed(new_speed);
 //        mqttClient.publish(mqtttopic_speed_get,String(new_speed).c_str());
         stepper[i].setAcceleration(1000);
