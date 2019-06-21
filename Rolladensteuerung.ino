@@ -2,7 +2,8 @@
 // TODO: MQTT/WLAN/Stepper functions in extra files
 // TODO: stop is not working any more with blocking stepper movement
 
-#define VERSION "19.06"
+#define VERSION "19.06.1"
+#define NAME "Rollo"
 
 #include <ESP8266WiFi.h>
 #include <WiFiClient.h> 
@@ -95,7 +96,7 @@ void setup() {
   }
  
   // Connect to WiFi
-  WiFi.hostname("rollo");
+  WiFi.hostname(NAME);
   if(eeprom_ssid.length() > 1){
     WiFi.disconnect();
     WiFi.mode(WIFI_STA);
@@ -183,7 +184,10 @@ void loop() {
       stepper[i].run();
     }
   }
-  server.handleClient(); // Webserver
+
+  if(!driver_active){
+    server.handleClient(); // Webserver
+  }
 }
 
 //////////////////////////
@@ -248,7 +252,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
 void mqtt_reconnect() {
 //  while (!mqttClient.connected()) {
 
-    if (mqttClient.connect("Rollo")) {
+    if (mqttClient.connect(NAME)) {
       for(uint8_t i=0; i<STEPPER_COUNT; i++){
         mqttClient.subscribe(mqtttopic_cmd[i]);
         mqttClient.subscribe(mqtttopic_abs[i]);
@@ -317,14 +321,18 @@ void setupAP(void){
   
   delay(100);
   
-  WiFi.softAP("Rollo","");
+  WiFi.softAP(NAME,"");
 }
 
 void startWebServer(){
   server.on("/", []() {
     IPAddress ip = WiFi.softAPIP();
-    html = "<html><head><meta name='viewport' content='width=device-width, initial-scale=1.0'><title>Rollo</title></head><body>";
-    html += "<h3>Rollo v";
+    html = "<html><head><meta name='viewport' content='width=device-width, initial-scale=1.0'><title>";
+    html += NAME;
+    html += "</title></head><body>";
+    html += "<h3>";
+    html += NAME;
+    html += " v";
     html += VERSION;
     html += "</h3>";
     html += "<p>";
@@ -370,8 +378,12 @@ void startWebServer(){
     EEPROM.write(500,42); // Config Written = yes
     EEPROM.commit();
 
-    html = "<html><head><title>Rollo</title><meta http-equiv='refresh' content='10; url=/'></head><body>";
-    html += "<h3>Rollo</h3>";
+    html = "<html><head><title>";
+    html += NAME;
+    html += "</title><meta http-equiv='refresh' content='10; url=/'></head><body>";
+    html += "<h3>";
+    html += NAME;
+    html += "</h3>";
     html += "Einstellungen gespeichert - starte neu..<br>";
     html += "(wenn es nicht funktioniert, bitte hart restarten (Stecker ziehen))";
     html += "</body></html>";
@@ -386,8 +398,12 @@ void startWebServer(){
     }
     EEPROM.commit();
     
-    html = "<html><head><title>Rollo</title><meta http-equiv='refresh' content='10; url=/'></head><body>";
-    html += "<h3>Rollo</h3>";
+    html = "<html><head><title>";
+    html += NAME;
+    html += "</title><meta http-equiv='refresh' content='10; url=/'></head><body>";
+    html += "<h3>";
+    html += NAME;
+    html += "</h3>";
     html += "Einstellungen zur&uuml;ckgesetzt - starte neu..<br>";
     html += "(wenn es nicht funktioniert, bitte hart restarten (Stecker ziehen))";
     html += "</body></html>";
